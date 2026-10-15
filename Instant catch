@@ -32,22 +32,45 @@ local function isMinigameActive(name)
     return playerGui and playerGui:FindFirstChild(name) ~= nil
 end
 
+local MAIN_SCAN_LIMIT = 2
+local MAIN_SCAN_DELAY = 0.2
 local mainCache
 local mainScanAttempts = 0
 local mainNextScanAt = 0
-local MAIN_SCAN_LIMIT = 3
-local MAIN_SCAN_DELAY = 0.2
+local mainPatchApplied = false
 
 local function clearMain()
     mainCache = nil
     mainScanAttempts = 0
     mainNextScanAt = 0
+    mainPatchApplied = false
+end
+
+local function scanMain()
+    local ok, result = pcall(function()
+        return findgc("_progressMult", {
+            _progressMult = "number",
+            _drainMult = "number",
+            _progress = "number",
+            _locked = "boolean",
+            _zone = "table",
+            _marker = "table",
+            _item = "table",
+            _rope = "table"
+        })
+    end)
+
+    if not ok then
+        warn("[ScroomCatch] main scan failed:", result)
+        return nil
+    end
+    return result
 end
 
 local function maintainInstantCatch()
     if not UI.GetValue("sc_minimal_instant_catch")
-        or not isMinigameActive("MainMinigame") then
-        clearMain()
+        or not isMinigameActive("MainMinigame")
+        or mainPatchApplied then
         return
     end
 
@@ -58,55 +81,82 @@ local function maintainInstantCatch()
 
         mainScanAttempts = mainScanAttempts + 1
         mainNextScanAt = tick() + MAIN_SCAN_DELAY
-        mainCache = findgc("_progressMult", {
-            _progressMult = "number",
-            _drainMult = "number",
-            _progress = "number",
-            _locked = "boolean",
-            _zone = "table",
-            _marker = "table",
-            _item = "table",
-            _rope = "table"
-        })
+        mainCache = scanMain()
 
         if not mainCache or #mainCache == 0 then
             mainCache = nil
+            if mainScanAttempts >= MAIN_SCAN_LIMIT then
+                print("[ScroomCatch] main controller cache empty after 2 scans")
+            end
             return
         end
     end
 
+    local drainOk, drainWrites = pcall(applygc, mainCache, "_drainMult", 0)
+    local unlockOk, unlockWrites = pcall(applygc, mainCache, "_locked", false)
     local progressOk, progressWrites = pcall(applygc, mainCache, "_progress", 1)
-    local drainOk = pcall(applygc, mainCache, "_drainMult", 0)
-    pcall(applygc, mainCache, "_locked", false)
+    local wroteProgress = tonumber(progressWrites) or 0
 
-    if not progressOk or not drainOk then
-        warn("[ScroomCatch] instant catch apply failed:", progressWrites)
-        clearMain()
+    if drainOk and unlockOk and progressOk and wroteProgress > 0 then
+        mainPatchApplied = true
+        print(
+            "[ScroomCatch] instant catch applied; writes",
+            tostring(progressWrites),
+            tostring(drainWrites),
+            tostring(unlockWrites)
+        )
+        return
     end
+
+    warn(
+        "[ScroomCatch] main apply failed or wrote nothing:",
+        tostring(progressWrites),
+        tostring(drainWrites),
+        tostring(unlockWrites)
+    )
+    mainCache = nil
+    mainNextScanAt = tick() + MAIN_SCAN_DELAY
 end
 
-local tuneCache
-local tunePatchApplied = false
-local tuneScanAttempts = 0
-local tuneNextScanAt = 0
 local TUNE_SCAN_LIMIT = 2
 local TUNE_SCAN_DELAY = 0.12
+local tuneCache
+local tuneScanAttempts = 0
+local tuneNextScanAt = 0
+local tunePatchApplied = false
 
 local function clearTune()
     tuneCache = nil
-    tunePatchApplied = false
     tuneScanAttempts = 0
     tuneNextScanAt = 0
+    tunePatchApplied = false
+end
+
+local function scanTune()
+    local ok, result = pcall(function()
+        return findgc("_targetTime", {
+            _targetTime = "number",
+            _elapsed = "number",
+            _target = "number",
+            _needleX = "number",
+            _needleVel = "number",
+            _purity = "number",
+            _dwell = "number",
+            _ui = "table"
+        })
+    end)
+
+    if not ok then
+        warn("[ScroomCatch] frequency scan failed:", result)
+        return nil
+    end
+    return result
 end
 
 local function maintainInstantFrequency()
     if not UI.GetValue("sc_minimal_instant_frequency")
-        or not isMinigameActive("TuningMinigame") then
-        clearTune()
-        return
-    end
-
-    if tunePatchApplied then
+        or not isMinigameActive("TuningMinigame")
+        or tunePatchApplied then
         return
     end
 
@@ -117,21 +167,12 @@ local function maintainInstantFrequency()
 
         tuneScanAttempts = tuneScanAttempts + 1
         tuneNextScanAt = tick() + TUNE_SCAN_DELAY
-        tuneCache = findgc("_targetTime", {
-            _targetTime = "number",
-            _elapsed = "number",
-            _target = "number",
-            _needleX = "number",
-            _needleVel = "number",
-            _purity = "number",
-            _dwell = "number",
-            _ui = "table"
-        })
+        tuneCache = scanTune()
 
         if not tuneCache or #tuneCache == 0 then
             tuneCache = nil
             if tuneScanAttempts >= TUNE_SCAN_LIMIT then
-                print("[ScroomCatch] frequency controller not found after 2 scans")
+                print("[ScroomCatch] frequency cache empty after 2 scans")
             end
             return
         end
@@ -141,13 +182,13 @@ local function maintainInstantFrequency()
     local writes = tonumber(changed) or 0
     if ok and writes > 0 then
         tunePatchApplied = true
-        print("[ScroomCatch] frequency: elapsed forced; writes", tostring(writes))
-    elseif tuneScanAttempts >= TUNE_SCAN_LIMIT then
-        tuneCache = nil
-        print("[ScroomCatch] frequency patch did not update elapsed after 2 scans")
+        print("[ScroomCatch] instant frequency applied; writes", tostring(writes))
     else
         tuneCache = nil
         tuneNextScanAt = tick() + TUNE_SCAN_DELAY
+        if tuneScanAttempts >= TUNE_SCAN_LIMIT then
+            print("[ScroomCatch] frequency apply had no writes after 2 scans")
+        end
     end
 end
 
@@ -158,20 +199,14 @@ UI.AddTab("Scroom Catch Minimal", function(tab)
         "sc_minimal_instant_catch",
         "Instant Catch",
         false,
-        function(enabled)
-            if enabled and isMinigameActive("MainMinigame") then
-                clearMain()
-            end
-        end
+        clearMain
     )
 
     settings:Toggle(
         "sc_minimal_instant_frequency",
         "Instant Frequency Minigame",
         false,
-        function()
-            clearTune()
-        end
+        clearTune
     )
 end)
 
@@ -187,20 +222,16 @@ state.heartbeat = RunService.Heartbeat:Connect(function()
     end
 
     local mainActive = isMinigameActive("MainMinigame")
-    if mainActive and not wasMainActive then
+    if mainActive ~= wasMainActive then
         clearMain()
-    elseif not mainActive and wasMainActive then
-        clearMain()
+        wasMainActive = mainActive
     end
-    wasMainActive = mainActive
 
     local tuneActive = isMinigameActive("TuningMinigame")
-    if tuneActive and not wasTuneActive then
+    if tuneActive ~= wasTuneActive then
         clearTune()
-    elseif not tuneActive and wasTuneActive then
-        clearTune()
+        wasTuneActive = tuneActive
     end
-    wasTuneActive = tuneActive
 
     local ok, err = pcall(function()
         maintainInstantCatch()
