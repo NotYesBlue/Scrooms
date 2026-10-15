@@ -53,6 +53,26 @@ end
 local mainGcCache
 local mainWatchdogClock = 0
 local mainWatchdogRescanAt = 0
+local instantMainApplied = false
+
+local function applyInstantMain(active)
+    if not UI.GetValue("sc_instant_progress") or instantMainApplied then
+        return
+    end
+
+    local drainOk, drainWrites = pcall(applygc, active, "_drainMult", 0)
+    local unlockOk, unlockWrites = pcall(applygc, active, "_locked", false)
+    local progressOk, progressWrites = pcall(applygc, active, "_progress", 1)
+
+    if drainOk and unlockOk and progressOk and (tonumber(progressWrites) or 0) > 0 then
+        instantMainApplied = true
+        print("[ScroomCatch] instant catch applied; writes",
+            tostring(progressWrites), tostring(drainWrites), tostring(unlockWrites))
+    else
+        warn("[ScroomCatch] instant catch apply failed or wrote nothing:",
+            tostring(progressWrites), tostring(drainWrites), tostring(unlockWrites))
+    end
+end
 
 local function patchMainMinigame()
     if not isMinigameActive("MainMinigame") then
@@ -101,6 +121,7 @@ local function patchMainMinigame()
         return 0
     end
 
+    applyInstantMain(active)
     return gainChanged or 0
 end
 
@@ -198,6 +219,7 @@ local function maintainMainPatch(deltaTime)
         mainWatchdogClock = 0
         mainWatchdogRescanAt = 0
         mainGcCache = nil
+        instantMainApplied = false
         return
     end
 
@@ -212,7 +234,6 @@ local function maintainMainPatch(deltaTime)
         if tick() < mainWatchdogRescanAt then
             return
         end
-
         mainWatchdogRescanAt = tick() + 1
         active = findgc("_progressMult", {
             _progressMult = "number",
@@ -244,9 +265,7 @@ local function maintainMainPatch(deltaTime)
         pcall(applygc, active, "_locked", false)
     end
 
-    if UI.GetValue("sc_instant_progress") then
-        pcall(applygc, active, "_progress", 1)
-    end
+    applyInstantMain(active)
 
     if not gainOk or not lossOk then
         mainGcCache = nil
@@ -370,6 +389,7 @@ UI.AddTab("Scroom Catch", function(tab)
     settings:Toggle("sc_enabled", "Enabled", true, function(enabled)
         -- Do not reuse a controller that belonged to an earlier minigame.
         mainGcCache = nil
+        instantMainApplied = false
         clearTuneCaches()
         mainWatchdogClock = 0
         mainWatchdogRescanAt = 0
@@ -439,6 +459,7 @@ UI.AddTab("Scroom Catch", function(tab)
         end
     )
     settings:Toggle("sc_instant_progress", "Instant Catch", false, function()
+        instantMainApplied = false
         if UI.GetValue("sc_enabled") then
             runPatchNow()
         end
@@ -510,6 +531,7 @@ state.heartbeat = RunService.Heartbeat:Connect(function(deltaTime)
         mainGcCache = nil
         mainWatchdogClock = 0.15
         mainWatchdogRescanAt = 0
+        instantMainApplied = false
     end
     if wasMainActive and not mainActive
         and UI.GetValue("sc_enabled")
