@@ -1,0 +1,214 @@
+-- Minimal Scroom Catch UI for Matcha
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players and Players.LocalPlayer
+local RunService = game:GetService("RunService")
+
+if not LocalPlayer then
+    warn("[ScroomCatch] Join the game before running this script.")
+    return
+end
+
+local state = _G.__SCROOM_MINIMAL_STATE or {}
+state.version = (state.version or 0) + 1
+_G.__SCROOM_MINIMAL_STATE = state
+
+pcall(function()
+    if state.heartbeat then
+        state.heartbeat:Disconnect()
+    end
+end)
+
+pcall(function()
+    UI.RemoveTab("Scroom Catch Minimal")
+end)
+
+local playerGui
+
+local function isMinigameActive(name)
+    if not playerGui or not playerGui.Parent then
+        playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    end
+    return playerGui and playerGui:FindFirstChild(name) ~= nil
+end
+
+local mainCache
+local mainScanAttempts = 0
+local mainNextScanAt = 0
+local MAIN_SCAN_LIMIT = 3
+local MAIN_SCAN_DELAY = 0.2
+
+local function clearMain()
+    mainCache = nil
+    mainScanAttempts = 0
+    mainNextScanAt = 0
+end
+
+local function maintainInstantCatch()
+    if not UI.GetValue("sc_minimal_instant_catch")
+        or not isMinigameActive("MainMinigame") then
+        clearMain()
+        return
+    end
+
+    if not mainCache then
+        if mainScanAttempts >= MAIN_SCAN_LIMIT or tick() < mainNextScanAt then
+            return
+        end
+
+        mainScanAttempts = mainScanAttempts + 1
+        mainNextScanAt = tick() + MAIN_SCAN_DELAY
+        mainCache = findgc("_progressMult", {
+            _progressMult = "number",
+            _drainMult = "number",
+            _progress = "number",
+            _locked = "boolean",
+            _zone = "table",
+            _marker = "table",
+            _item = "table",
+            _rope = "table"
+        })
+
+        if not mainCache or #mainCache == 0 then
+            mainCache = nil
+            return
+        end
+    end
+
+    local progressOk, progressWrites = pcall(applygc, mainCache, "_progress", 1)
+    local drainOk = pcall(applygc, mainCache, "_drainMult", 0)
+    pcall(applygc, mainCache, "_locked", false)
+
+    if not progressOk or not drainOk then
+        warn("[ScroomCatch] instant catch apply failed:", progressWrites)
+        clearMain()
+    end
+end
+
+local tuneCache
+local tunePatchApplied = false
+local tuneScanAttempts = 0
+local tuneNextScanAt = 0
+local TUNE_SCAN_LIMIT = 2
+local TUNE_SCAN_DELAY = 0.12
+
+local function clearTune()
+    tuneCache = nil
+    tunePatchApplied = false
+    tuneScanAttempts = 0
+    tuneNextScanAt = 0
+end
+
+local function maintainInstantFrequency()
+    if not UI.GetValue("sc_minimal_instant_frequency")
+        or not isMinigameActive("TuningMinigame") then
+        clearTune()
+        return
+    end
+
+    if tunePatchApplied then
+        return
+    end
+
+    if not tuneCache then
+        if tuneScanAttempts >= TUNE_SCAN_LIMIT or tick() < tuneNextScanAt then
+            return
+        end
+
+        tuneScanAttempts = tuneScanAttempts + 1
+        tuneNextScanAt = tick() + TUNE_SCAN_DELAY
+        tuneCache = findgc("_targetTime", {
+            _targetTime = "number",
+            _elapsed = "number",
+            _target = "number",
+            _needleX = "number",
+            _needleVel = "number",
+            _purity = "number",
+            _dwell = "number",
+            _ui = "table"
+        })
+
+        if not tuneCache or #tuneCache == 0 then
+            tuneCache = nil
+            if tuneScanAttempts >= TUNE_SCAN_LIMIT then
+                print("[ScroomCatch] frequency controller not found after 2 scans")
+            end
+            return
+        end
+    end
+
+    local ok, changed = pcall(applygc, tuneCache, "_elapsed", 999)
+    local writes = tonumber(changed) or 0
+    if ok and writes > 0 then
+        tunePatchApplied = true
+        print("[ScroomCatch] frequency: elapsed forced; writes", tostring(writes))
+    elseif tuneScanAttempts >= TUNE_SCAN_LIMIT then
+        tuneCache = nil
+        print("[ScroomCatch] frequency patch did not update elapsed after 2 scans")
+    else
+        tuneCache = nil
+        tuneNextScanAt = tick() + TUNE_SCAN_DELAY
+    end
+end
+
+UI.AddTab("Scroom Catch Minimal", function(tab)
+    local settings = tab:Section("Minigames", "Left")
+
+    settings:Toggle(
+        "sc_minimal_instant_catch",
+        "Instant Catch",
+        false,
+        function(enabled)
+            if enabled and isMinigameActive("MainMinigame") then
+                clearMain()
+            end
+        end
+    )
+
+    settings:Toggle(
+        "sc_minimal_instant_frequency",
+        "Instant Frequency Minigame",
+        false,
+        function()
+            clearTune()
+        end
+    )
+end)
+
+local version = state.version
+local wasMainActive = false
+local wasTuneActive = false
+
+state.heartbeat = RunService.Heartbeat:Connect(function()
+    if not _G.__SCROOM_MINIMAL_STATE
+        or _G.__SCROOM_MINIMAL_STATE.version ~= version then
+        state.heartbeat:Disconnect()
+        return
+    end
+
+    local mainActive = isMinigameActive("MainMinigame")
+    if mainActive and not wasMainActive then
+        clearMain()
+    elseif not mainActive and wasMainActive then
+        clearMain()
+    end
+    wasMainActive = mainActive
+
+    local tuneActive = isMinigameActive("TuningMinigame")
+    if tuneActive and not wasTuneActive then
+        clearTune()
+    elseif not tuneActive and wasTuneActive then
+        clearTune()
+    end
+    wasTuneActive = tuneActive
+
+    local ok, err = pcall(function()
+        maintainInstantCatch()
+        maintainInstantFrequency()
+    end)
+    if not ok then
+        warn("[ScroomCatch] heartbeat error:", err)
+    end
+end)
+
+print("[ScroomCatch] Minimal script loaded")
