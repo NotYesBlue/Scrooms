@@ -51,6 +51,8 @@ local function getAutoRingDelay()
 end
 
 local mainGcCache
+local mainWatchdogClock = 0
+local mainWatchdogRescanAt = 0
 
 local function patchMainMinigame()
     if not isMinigameActive("MainMinigame") then
@@ -102,8 +104,6 @@ local function patchMainMinigame()
     return gainChanged or 0
 end
 
-local mainWatchdogClock = 0
-local mainWatchdogRescanAt = 0
 local wasMainActive = false
 local tuneGcCache
 local tunePatchApplied = false
